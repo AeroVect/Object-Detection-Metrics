@@ -25,6 +25,7 @@ class Evaluator:
         self,
         boundingboxes,
         IOUThreshold=0.5,
+        scoreThreshold=0.0,
         method=MethodAveragePrecision.EveryPointInterpolation,
     ):
         """Get the metrics used by the VOC Pascal 2012 challenge.
@@ -72,7 +73,7 @@ class Evaluator:
                         bb.getAbsoluteBoundingBox(BBFormat.XYX2Y2),
                     ]
                 )
-            else:
+            elif bb.getConfidence() >= scoreThreshold:
                 detections.append(
                     [
                         bb.getImageName(),
@@ -135,7 +136,12 @@ class Evaluator:
             # compute precision, recall and average precision
             acc_FP = np.cumsum(FP)
             acc_TP = np.cumsum(TP)
+
+            if npos < 1:
+                continue
+
             rec = acc_TP / npos
+
             prec = np.divide(acc_TP, (acc_FP + acc_TP))
             # Depending on the method, call the right implementation
             if method == MethodAveragePrecision.EveryPointInterpolation:
@@ -161,6 +167,7 @@ class Evaluator:
         self,
         boundingBoxes,
         IOUThreshold=0.5,
+        scoreThreshold=0.0,
         method=MethodAveragePrecision.EveryPointInterpolation,
         showAP=False,
         showInterpolatedPrecision=False,
@@ -198,7 +205,9 @@ class Evaluator:
             dict['total TP']: total number of True Positive detections;
             dict['total FP']: total number of False Negative detections;
         """
-        results = self.GetPascalVOCMetrics(boundingBoxes, IOUThreshold, method)
+        results = self.GetPascalVOCMetrics(
+            boundingBoxes, IOUThreshold, scoreThreshold, method
+        )
         result = None
         # Each resut represents a class
         for result in results:
