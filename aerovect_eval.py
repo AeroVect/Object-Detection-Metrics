@@ -1,55 +1,19 @@
-###########################################################################################
-#                                                                                         #
-# This sample shows how to evaluate object detections applying the following metrics:     #
-#  * Precision x Recall curve       ---->       used by VOC PASCAL 2012)                  #
-#  * Average Precision (AP)         ---->       used by VOC PASCAL 2012)                  #
-#                                                                                         #
-# Developed by: Rafael Padilla (rafael.padilla@smt.ufrj.br)                               #
-#        SMT - Signal Multimedia and Telecommunications Lab                               #
-#        COPPE - Universidade Federal do Rio de Janeiro                                   #
-#        Last modification: Feb 12th 2021                                                 #
-###########################################################################################
+"""
+Our modification still computes mAP the same way as Pascal VOC, but we added functionality to obtain class-specific optimal score threshold using F1 score.
+For each score threshold, the Precision and Recall needed to compute the F1 score are not computed per image, but are instead computed using the total TP, FP, and FN for the class.
+This way, we don't bias an "easier" image that contains less number of groundtruths (GT) than a "harder" image with more GT.
 
-####################################################################################################
-#                                                                                                  #
-# THE CURRENT VERSION WAS UPDATED WITH A VISUAL INTERFACE, INCLUDING MORE METRICS AND SUPPORTING   #
-# OTHER FILE FORMATS. PLEASE ACCESS IT ACCESSED AT:                                                #
-#                                                                                                  #
-# https://github.com/rafaelpadilla/review_object_detection_metrics                                 #
-#                                                                                                  #
-# @Article{electronics10030279,                                                                    #
-#     author         = {Padilla, Rafael and Passos, Wesley L. and Dias, Thadeu L. B. and Netto,    #
-#                       Sergio L. and da Silva, Eduardo A. B.},                                    #
-#     title          = {A Comparative Analysis of Object Detection Metrics with a Companion        #
-#                       Open-Source Toolkit},                                                      #
-#     journal        = {Electronics},                                                              #
-#     volume         = {10},                                                                       #
-#     year           = {2021},                                                                     #
-#     number         = {3},                                                                        #
-#     article-number = {279},                                                                      #
-#     url            = {https://www.mdpi.com/2079-9292/10/3/279},                                  #
-#     issn           = {2079-9292},                                                                #
-#     doi            = {10.3390/electronics10030279}, }                                            #
-####################################################################################################
-
-####################################################################################################
-# If you use this project, please consider citing:                                                 #
-#                                                                                                  #
-# @INPROCEEDINGS {padillaCITE2020,                                                                 #
-#    author    = {R. {Padilla} and S. L. {Netto} and E. A. B. {da Silva}},                         #
-#    title     = {A Survey on Performance Metrics for Object-Detection Algorithms},                #
-#    booktitle = {2020 International Conference on Systems, Signals and Image Processing (IWSSIP)},#
-#    year      = {2020},                                                                           #
-#    pages     = {237-242},}                                                                       #
-#                                                                                                  #
-# This work is published at: https://github.com/rafaelpadilla/Object-Detection-Metrics             #
-####################################################################################################
+TLDR: Use COCO metrics for more robust mAP evaluation, but use this script to get the optimal score threshold for each class using F1 score.
+"""
 
 import argparse
 import glob
 import os
 import shutil
 import sys
+import numpy as np
+from tqdm import tqdm
+from collections import defaultdict
 
 import _init_paths
 from BoundingBox import BoundingBox
@@ -169,7 +133,6 @@ def getBoundingBoxes(
                 continue
             splitLine = line.split(" ")
             if isGT:
-                # idClass = int(splitLine[0]) #class
                 idClass = splitLine[0]  # class
                 x = float(splitLine[1])
                 y = float(splitLine[2])
@@ -188,7 +151,6 @@ def getBoundingBoxes(
                     format=bbFormat,
                 )
             else:
-                # idClass = int(splitLine[0]) #class
                 idClass = splitLine[0]  # class
                 confidence = float(splitLine[1])
                 x = float(splitLine[2])
@@ -218,23 +180,10 @@ def getBoundingBoxes(
 # Get current path to set default folders
 currentPath = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "0.2 (beta)"
-
-with open("message.txt", "r") as f:
-    message = f"\n\n{f.read()}\n\n"
-
-print(message)
 
 parser = argparse.ArgumentParser(
-    prog="Object Detection Metrics - Pascal VOC",
-    description=f"{message}\nThis project applies the most popular metrics used to evaluate object detection "
-    "algorithms.\nThe current implemention runs the Pascal VOC metrics.\nFor further references, "
-    "please check:\nhttps://github.com/rafaelpadilla/Object-Detection-Metrics",
-    epilog="Developed by: Rafael Padilla (rafael.padilla@smt.ufrj.br)",
+    prog="Object Detection Metrics - modified for AeroVect's use",
 )
-parser.add_argument("-v", "--version", action="version", version="%(prog)s " + VERSION)
-# Positional arguments
-# Mandatory
 parser.add_argument(
     "-gt",
     "--gtfolder",
@@ -251,7 +200,6 @@ parser.add_argument(
     metavar="",
     help="folder containing your detected bounding boxes",
 )
-# Optional
 parser.add_argument(
     "-t",
     "--threshold",
@@ -381,18 +329,9 @@ if os.path.isdir(savePath) and os.listdir(savePath):
 # Clear folder and save results
 shutil.rmtree(savePath, ignore_errors=True)
 os.makedirs(savePath)
+
 # Show plot during execution
 showPlot = args.showPlot
-
-# print('iouThreshold= %f' % iouThreshold)
-# print('savePath = %s' % savePath)
-# print('gtFormat = %s' % gtFormat)
-# print('detFormat = %s' % detFormat)
-# print('gtFolder = %s' % gtFolder)
-# print('detFolder = %s' % detFolder)
-# print('gtCoordType = %s' % gtCoordType)
-# print('detCoordType = %s' % detCoordType)
-# print('showPlot %s' % showPlot)
 
 # Get groundtruth boxes
 allBoundingBoxes, allClasses = getBoundingBoxes(
@@ -411,51 +350,70 @@ allBoundingBoxes, allClasses = getBoundingBoxes(
 allClasses.sort()
 
 evaluator = Evaluator()
-acc_AP = 0
-validClasses = 0
 
-# Plot Precision x Recall curve
-detections = evaluator.PlotPrecisionRecallCurve(
-    allBoundingBoxes,  # Object containing all bounding boxes (ground truths and detections)
-    IOUThreshold=iouThreshold,  # IOU threshold
-    method=MethodAveragePrecision.EveryPointInterpolation,
-    showAP=True,  # Show Average Precision in the title of the plot
-    showInterpolatedPrecision=False,  # Don't plot the interpolated precision curve
-    savePath=savePath,
-    showGraphic=showPlot,
-)
 
-f = open(os.path.join(savePath, "results.txt"), "w")
-f.write("Object Detection Metrics\n")
-f.write("https://github.com/rafaelpadilla/Object-Detection-Metrics\n\n\n")
-f.write("Average Precision (AP), Precision and Recall per class:")
+scores = np.arange(0, 1, 0.01)
+ap_per_class = {}
+f1_per_class = defaultdict(list)
+precision_per_class = defaultdict(list)
+recall_per_class = defaultdict(list)
 
-# each detection is a class
-for metricsPerClass in detections:
+for scoreThreshold in tqdm(scores):
+    # Plot Precision x Recall curve
 
-    # Get metric values per each class
-    cl = metricsPerClass["class"]
-    ap = metricsPerClass["AP"]
-    precision = metricsPerClass["precision"]
-    recall = metricsPerClass["recall"]
-    totalPositives = metricsPerClass["total positives"]
-    total_TP = metricsPerClass["total TP"]
-    total_FP = metricsPerClass["total FP"]
+    # Only plot PR curve for no score thresholding
+    if scoreThreshold == 0.0:
+        savePath = savePath
+    else:
+        savePath = None
 
-    if totalPositives > 0:
-        validClasses = validClasses + 1
-        acc_AP = acc_AP + ap
-        prec = ["%.2f" % p for p in precision]
-        rec = ["%.2f" % r for r in recall]
-        ap_str = "{0:.2f}%".format(ap * 100)
-        # ap_str = "{0:.4f}%".format(ap * 100)
-        print("AP: %s (%s)" % (ap_str, cl))
-        f.write("\n\nClass: %s" % cl)
-        f.write("\nAP: %s" % ap_str)
-        f.write("\nPrecision: %s" % prec)
-        f.write("\nRecall: %s" % rec)
+    detections = evaluator.PlotPrecisionRecallCurve(
+        allBoundingBoxes,  # Object containing all bounding boxes (ground truths and detections)
+        scoreThreshold=scoreThreshold,  # score threshold
+        IOUThreshold=iouThreshold,  # IOU threshold
+        method=MethodAveragePrecision.EveryPointInterpolation,
+        showAP=True,  # Show Average Precision in the title of the plot
+        showInterpolatedPrecision=True,  # Don't plot the interpolated precision curve
+        savePath=savePath,
+        showGraphic=showPlot,
+    )
 
-mAP = acc_AP / validClasses
-mAP_str = "{0:.2f}%".format(mAP * 100)
-print("mAP: %s" % mAP_str)
-f.write("\n\n\nmAP: %s" % mAP_str)
+    # each detection is a class
+    for metricsPerClass in detections:
+        # Get metric values per each class
+        cl = metricsPerClass["class"]
+        ap = metricsPerClass["AP"]
+        totalPositives = metricsPerClass["total positives"]
+        total_TP = metricsPerClass["total TP"]
+        total_FP = metricsPerClass["total FP"]
+
+        if scoreThreshold == 0.0:
+            ap_per_class[cl] = ap
+
+        if totalPositives > 0:
+            precision = (
+                total_TP / (total_TP + total_FP) if total_TP + total_FP > 0 else 1.0
+            )
+            recall = total_TP / totalPositives
+            f1 = (
+                2 * (precision * recall) / (precision + recall)
+                if precision + recall > 0
+                else 0
+            )
+            f1_per_class[cl].append(f1)
+            precision_per_class[cl].append(precision)
+            recall_per_class[cl].append(recall)
+
+# Obtain obtain score threshold for each class
+print(f"IoU threshold={iouThreshold}")
+for cl in allClasses:
+    f1_values = f1_per_class[cl]
+    if len(f1_values):
+        score_i = np.argmax(f1_values)
+        score = scores[score_i]
+        print(
+            f"Class {cl} - score: {format(score, '.2f')}, f1: {format(f1_values[score_i], '.2f')}, AP: {format(ap_per_class[cl], '.2f')}"
+        )
+
+mAP = np.mean(list(ap_per_class.values()))
+print(f"mAP: {format(mAP, '.2f')}")
