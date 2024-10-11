@@ -133,7 +133,6 @@ def getBoundingBoxes(
                 continue
             splitLine = line.split(" ")
             if isGT:
-                # idClass = int(splitLine[0]) #class
                 idClass = splitLine[0]  # class
                 x = float(splitLine[1])
                 y = float(splitLine[2])
@@ -152,7 +151,6 @@ def getBoundingBoxes(
                     format=bbFormat,
                 )
             else:
-                # idClass = int(splitLine[0]) #class
                 idClass = splitLine[0]  # class
                 confidence = float(splitLine[1])
                 x = float(splitLine[2])
